@@ -1,1 +1,140 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Chat Prototype</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <h1>Chat Prototype</h1>
+            <p class="login-subtitle">Please sign in to continue</p>
+            
+            <form id="loginForm" class="login-form">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input 
+                        type="text" 
+                        id="username" 
+                        name="username" 
+                        autocomplete="username"
+                        required 
+                        autofocus
+                    >
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        autocomplete="current-password"
+                        required
+                    >
+                </div>
+                
+                <div id="errorMessage" class="error-message" role="alert" aria-live="polite"></div>
+                
+                <button type="submit" class="btn-primary" id="loginButton">
+                    Login
+                </button>
+            </form>
+            
+            <div class="login-help">
+                <p class="hint">Test credentials (see <code>users.js</code> for full list):</p>
+                <ul class="hint-list">
+                    <li><strong>alice</strong> / password123</li>
+                    <li><strong>bob</strong> / password123</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const loginForm = document.getElementById('loginForm');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const errorMessage = document.getElementById('errorMessage');
+        const loginButton = document.getElementById('loginButton');
+        
+        // Clear error message when user types
+        usernameInput.addEventListener('input', clearError);
+        passwordInput.addEventListener('input', clearError);
+        
+        function clearError() {
+            errorMessage.textContent = '';
+            errorMessage.style.display = 'none';
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+        }
+        
+        function setLoading(isLoading) {
+            loginButton.disabled = isLoading;
+            loginButton.textContent = isLoading ? 'Logging in...' : 'Login';
+            usernameInput.disabled = isLoading;
+            passwordInput.disabled = isLoading;
+        }
+        
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            clearError();
+            
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+            
+            // Client-side validation
+            if (!username) {
+                showError('Please enter a username');
+                usernameInput.focus();
+                return;
+            }
+            
+            if (!password) {
+                showError('Please enter a password');
+                passwordInput.focus();
+                return;
+            }
+            
+            setLoading(true);
+            
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.token && data.username) {
+                    // Store token in sessionStorage (cleared when browser/tab closes)
+                    sessionStorage.setItem('authToken', data.token);
+                    sessionStorage.setItem('username', data.username);
+                    
+                    // Redirect to chat with token and username as URL parameters
+                    window.location.href = `chat.html?token=${encodeURIComponent(data.token)}&user=${encodeURIComponent(data.username)}`;
+                } else if (response.status === 401) {
+                    showError('Invalid username or password');
+                    passwordInput.value = '';
+                    passwordInput.focus();
+                } else {
+                    showError(data.error || 'Login failed. Please try again.');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showError('Connection error. Please check if the server is running.');
+            } finally {
+                setLoading(false);
+            }
+        });
+    </script>
+</body>
+</html>
