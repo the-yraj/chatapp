@@ -3,138 +3,530 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Chat Prototype</title>
+    <title>Chat - Prototype</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-card">
-            <h1>Chat Prototype</h1>
-            <p class="login-subtitle">Please sign in to continue</p>
-            
-            <form id="loginForm" class="login-form">
-                <div class="form-group">
-                    <label for="username">Username</label>
-                    <input 
-                        type="text" 
-                        id="username" 
-                        name="username" 
-                        autocomplete="username"
-                        required 
-                        autofocus
-                    >
-                </div>
-                
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input 
-                        type="password" 
-                        id="password" 
-                        name="password" 
-                        autocomplete="current-password"
-                        required
-                    >
-                </div>
-                
-                <div id="errorMessage" class="error-message" role="alert" aria-live="polite"></div>
-                
-                <button type="submit" class="btn-primary" id="loginButton">
-                    Login
-                </button>
-            </form>
-            
-            <div class="login-help">
-                <p class="hint">Test credentials (see <code>users.js</code> for full list):</p>
-                <ul class="hint-list">
-                    <li><strong>alice</strong> / password123</li>
-                    <li><strong>bob</strong> / password123</li>
-                </ul>
+    <div class="chat-app">
+        <!-- Left Sidebar: Contact List -->
+        <aside class="contacts-panel">
+            <div class="contacts-header">
+                <h2>Contacts</h2>
             </div>
-        </div>
+            <div class="contacts-list" id="contactsList">
+                <!-- Dynamically populated -->
+            </div>
+        </aside>
+
+        <!-- Right Main: Chat Pane -->
+        <main class="chat-panel">
+            <!-- Header -->
+            <header class="chat-header">
+                <div class="current-user">
+                    <span class="user-label">You:</span>
+                    <span class="username" id="currentUsername"></span>
+                    <span class="online-dot online"></span>
+                </div>
+                <div class="online-users">
+                    <button class="online-users-btn" id="onlineUsersBtn">
+                        Online (<span id="onlineCount">0</span>)
+                    </button>
+                    <div class="online-users-dropdown" id="onlineUsersDropdown">
+                        <!-- Dynamically populated -->
+                    </div>
+                </div>
+            </header>
+
+            <!-- Chat Messages Area -->
+            <div class="chat-messages" id="chatMessages">
+                <div class="chat-welcome">
+                    <p>Select a contact to start chatting</p>
+                </div>
+            </div>
+
+            <!-- Message Input Footer -->
+            <footer class="chat-footer">
+                <div class="input-container">
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="Type a message..."
+                        rows="1"
+                        disabled
+                    ></textarea>
+                    <button id="sendButton" class="send-btn" disabled>Send</button>
+                </div>
+                <div class="footer-info">
+                    <span class="ai-suggestions-indicator" title="AI suggestions (disabled for prototype)">
+                        🤖 AI Suggestions: Off
+                    </span>
+                    <span class="connection-status" id="connectionStatus">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting...</span>
+                    </span>
+                </div>
+            </footer>
+        </main>
     </div>
-    
+
     <script>
-        const loginForm = document.getElementById('loginForm');
-        const usernameInput = document.getElementById('username');
-        const passwordInput = document.getElementById('password');
-        const errorMessage = document.getElementById('errorMessage');
-        const loginButton = document.getElementById('loginButton');
-        
-        // Clear error message when user types
-        usernameInput.addEventListener('input', clearError);
-        passwordInput.addEventListener('input', clearError);
-        
-        function clearError() {
-            errorMessage.textContent = '';
-            errorMessage.style.display = 'none';
+        // Parse URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const username = urlParams.get('user');
+
+        // Redirect to login if credentials missing
+        if (!token || !username) {
+            window.location.href = 'index.html';
         }
-        
-        function showError(message) {
-            errorMessage.textContent = message;
-            errorMessage.style.display = 'block';
-        }
-        
-        function setLoading(isLoading) {
-            loginButton.disabled = isLoading;
-            loginButton.textContent = isLoading ? 'Logging in...' : 'Login';
-            usernameInput.disabled = isLoading;
-            passwordInput.disabled = isLoading;
-        }
-        
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            clearError();
-            
-            const username = usernameInput.value.trim();
-            const password = passwordInput.value;
-            
-            // Client-side validation
-            if (!username) {
-                showError('Please enter a username');
-                usernameInput.focus();
-                return;
-            }
-            
-            if (!password) {
-                showError('Please enter a password');
-                passwordInput.focus();
-                return;
-            }
-            
-            setLoading(true);
-            
-            try {
-                const response = await fetch('/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username, password })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok && data.token && data.username) {
-                    // Store token in sessionStorage (cleared when browser/tab closes)
-                    sessionStorage.setItem('authToken', data.token);
-                    sessionStorage.setItem('username', data.username);
-                    
-                    // Redirect to chat with token and username as URL parameters
-                    window.location.href = `chat.html?token=${encodeURIComponent(data.token)}&user=${encodeURIComponent(data.username)}`;
-                } else if (response.status === 401) {
-                    showError('Invalid username or password');
-                    passwordInput.value = '';
-                    passwordInput.focus();
-                } else {
-                    showError(data.error || 'Login failed. Please try again.');
+
+        // Global state
+        let ws = null;
+        let currentContact = null;
+        let pendingMessages = new Map(); // messageId -> message object
+        let contacts = [];
+        let onlineUsers = new Set();
+        let messageHistory = new Map(); // contact -> array of messages
+
+        // DOM elements
+        const currentUsernameEl = document.getElementById('currentUsername');
+        const contactsListEl = document.getElementById('contactsList');
+        const chatMessagesEl = document.getElementById('chatMessages');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const connectionStatusEl = document.getElementById('connectionStatus');
+        const onlineUsersBtn = document.getElementById('onlineUsersBtn');
+        const onlineUsersDropdown = document.getElementById('onlineUsersDropdown');
+        const onlineCountEl = document.getElementById('onlineCount');
+
+        // Initialize
+        currentUsernameEl.textContent = username;
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.host;
+            const wsUrl = `${wsProtocol}//${wsHost}?token=${encodeURIComponent(token)}&user=${encodeURIComponent(username)}`;
+
+            updateConnectionStatus('connecting');
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateConnectionStatus('connected');
+                messageInput.disabled = false;
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data);
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
                 }
-            } catch (error) {
-                console.error('Login error:', error);
-                showError('Connection error. Please check if the server is running.');
-            } finally {
-                setLoading(false);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus('error');
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateConnectionStatus('disconnected');
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                
+                // Attempt to reconnect after 3 seconds
+                setTimeout(() => {
+                    console.log('Attempting to reconnect...');
+                    connectWebSocket();
+                }, 3000);
+            };
+        }
+
+        // Handle incoming WebSocket messages
+        function handleWebSocketMessage(data) {
+            switch (data.type) {
+                case 'incoming_message':
+                    handleIncomingMessage(data);
+                    break;
+                case 'ack_message':
+                    handleAckMessage(data);
+                    break;
+                case 'presence_update':
+                    handlePresenceUpdate(data);
+                    break;
+                case 'contacts_list':
+                    handleContactsList(data);
+                    break;
+                case 'pending_messages':
+                    handlePendingMessages(data);
+                    break;
+                default:
+                    console.log('Unknown message type:', data.type);
+            }
+        }
+
+        // Handle incoming message
+        function handleIncomingMessage(data) {
+            const { from, to, message, timestamp, messageId } = data;
+            
+            const msg = {
+                id: messageId,
+                from,
+                to,
+                text: message,
+                timestamp: new Date(timestamp),
+                status: 'delivered'
+            };
+
+            // Add to message history
+            const contact = from === username ? to : from;
+            if (!messageHistory.has(contact)) {
+                messageHistory.set(contact, []);
+            }
+            messageHistory.get(contact).push(msg);
+
+            // Display if currently chatting with this contact
+            if (currentContact === contact) {
+                displayMessage(msg);
+                scrollToBottom();
+            } else {
+                // Show notification dot on contact
+                updateContactUnreadIndicator(contact, true);
+            }
+        }
+
+        // Handle message acknowledgment
+        function handleAckMessage(data) {
+            const { messageId } = data;
+            
+            if (pendingMessages.has(messageId)) {
+                const msg = pendingMessages.get(messageId);
+                msg.status = 'sent';
+                pendingMessages.delete(messageId);
+
+                // Update UI
+                const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+                if (messageEl) {
+                    messageEl.classList.remove('pending');
+                    messageEl.classList.add('sent');
+                    const statusEl = messageEl.querySelector('.message-status');
+                    if (statusEl) {
+                        statusEl.textContent = 'Sent';
+                    }
+                }
+            }
+        }
+
+        // Handle presence update
+        function handlePresenceUpdate(data) {
+            const { user, online } = data;
+            
+            if (online) {
+                onlineUsers.add(user);
+            } else {
+                onlineUsers.delete(user);
+            }
+
+            updateOnlineUsers();
+            updateContactPresence(user, online);
+        }
+
+        // Handle contacts list
+        function handleContactsList(data) {
+            contacts = data.contacts || [];
+            renderContacts();
+        }
+
+        // Handle pending messages
+        function handlePendingMessages(data) {
+            const { messages } = data;
+            
+            if (messages && messages.length > 0) {
+                messages.forEach(msg => {
+                    const messageData = {
+                        id: msg.messageId,
+                        from: msg.from,
+                        to: msg.to,
+                        text: msg.message,
+                        timestamp: new Date(msg.timestamp),
+                        status: 'delivered'
+                    };
+
+                    const contact = msg.from === username ? msg.to : msg.from;
+                    if (!messageHistory.has(contact)) {
+                        messageHistory.set(contact, []);
+                    }
+                    messageHistory.get(contact).push(messageData);
+
+                    if (currentContact === contact) {
+                        displayMessage(messageData);
+                    }
+                });
+
+                if (currentContact) {
+                    scrollToBottom();
+                }
+            }
+        }
+
+        // Render contacts list
+        function renderContacts() {
+            contactsListEl.innerHTML = '';
+            
+            // Filter out current user from contacts
+            const otherContacts = contacts.filter(c => c !== username);
+            
+            if (otherContacts.length === 0) {
+                contactsListEl.innerHTML = '<div class="no-contacts">No contacts available</div>';
+                return;
+            }
+
+            otherContacts.forEach(contact => {
+                const contactEl = document.createElement('div');
+                contactEl.className = 'contact-item';
+                contactEl.dataset.contact = contact;
+                
+                const isOnline = onlineUsers.has(contact);
+                
+                contactEl.innerHTML = `
+                    <span class="online-dot ${isOnline ? 'online' : 'offline'}"></span>
+                    <span class="contact-name">${contact}</span>
+                    <span class="unread-indicator" style="display: none;">●</span>
+                `;
+                
+                contactEl.addEventListener('click', () => openChat(contact));
+                contactsListEl.appendChild(contactEl);
+            });
+        }
+
+        // Update contact presence
+        function updateContactPresence(contact, isOnline) {
+            const contactEl = document.querySelector(`.contact-item[data-contact="${contact}"]`);
+            if (contactEl) {
+                const dotEl = contactEl.querySelector('.online-dot');
+                if (dotEl) {
+                    dotEl.classList.toggle('online', isOnline);
+                    dotEl.classList.toggle('offline', !isOnline);
+                }
+            }
+        }
+
+        // Update contact unread indicator
+        function updateContactUnreadIndicator(contact, hasUnread) {
+            const contactEl = document.querySelector(`.contact-item[data-contact="${contact}"]`);
+            if (contactEl) {
+                const indicator = contactEl.querySelector('.unread-indicator');
+                if (indicator) {
+                    indicator.style.display = hasUnread ? 'inline' : 'none';
+                }
+            }
+        }
+
+        // Open chat with contact
+        function openChat(contact) {
+            currentContact = contact;
+            sendButton.disabled = false;
+            
+            // Update active contact UI
+            document.querySelectorAll('.contact-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.contact === contact);
+            });
+
+            // Clear unread indicator
+            updateContactUnreadIndicator(contact, false);
+
+            // Clear and display messages
+            chatMessagesEl.innerHTML = '';
+            
+            const messages = messageHistory.get(contact) || [];
+            messages.forEach(msg => displayMessage(msg));
+            
+            scrollToBottom();
+            messageInput.focus();
+        }
+
+        // Display a message in the chat
+        function displayMessage(msg) {
+            const messageEl = document.createElement('div');
+            const isSender = msg.from === username;
+            
+            messageEl.className = `message ${isSender ? 'sent-message' : 'received-message'}`;
+            if (msg.status === 'pending') {
+                messageEl.classList.add('pending');
+            } else if (msg.status === 'sent') {
+                messageEl.classList.add('sent');
+            }
+            messageEl.dataset.messageId = msg.id;
+
+            const time = msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            let statusHtml = '';
+            if (isSender) {
+                if (msg.status === 'pending') {
+                    statusHtml = '<span class="message-status">Sending...</span>';
+                } else if (msg.status === 'sent') {
+                    statusHtml = '<span class="message-status">Sent</span>';
+                }
+            }
+
+            messageEl.innerHTML = `
+                <div class="message-bubble">
+                    <div class="message-text">${escapeHtml(msg.text)}</div>
+                    <div class="message-meta">
+                        <span class="timestamp">${time}</span>
+                        ${statusHtml}
+                    </div>
+                </div>
+            `;
+
+            chatMessagesEl.appendChild(messageEl);
+        }
+
+        // Send message
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            
+            if (!text || !currentContact || !ws || ws.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            const messageId = generateMessageId();
+            const timestamp = new Date();
+
+            const msg = {
+                id: messageId,
+                from: username,
+                to: currentContact,
+                text,
+                timestamp,
+                status: 'pending'
+            };
+
+            // Add to message history
+            if (!messageHistory.has(currentContact)) {
+                messageHistory.set(currentContact, []);
+            }
+            messageHistory.get(currentContact).push(msg);
+
+            // Add to pending messages
+            pendingMessages.set(messageId, msg);
+
+            // Optimistic UI: display immediately
+            displayMessage(msg);
+            scrollToBottom();
+
+            // Send via WebSocket
+            ws.send(JSON.stringify({
+                type: 'send_message',
+                to: currentContact,
+                message: text,
+                messageId,
+                timestamp: timestamp.toISOString()
+            }));
+
+            // Clear input
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+        }
+
+        // Update connection status
+        function updateConnectionStatus(status) {
+            const statusDot = connectionStatusEl.querySelector('.status-dot');
+            const statusText = connectionStatusEl.querySelector('.status-text');
+
+            switch (status) {
+                case 'connecting':
+                    statusDot.className = 'status-dot connecting';
+                    statusText.textContent = 'Connecting...';
+                    break;
+                case 'connected':
+                    statusDot.className = 'status-dot connected';
+                    statusText.textContent = 'Connected';
+                    break;
+                case 'disconnected':
+                    statusDot.className = 'status-dot disconnected';
+                    statusText.textContent = 'Disconnected';
+                    break;
+                case 'error':
+                    statusDot.className = 'status-dot error';
+                    statusText.textContent = 'Connection Error';
+                    break;
+            }
+        }
+
+        // Update online users list
+        function updateOnlineUsers() {
+            onlineCountEl.textContent = onlineUsers.size;
+            
+            onlineUsersDropdown.innerHTML = '';
+            
+            if (onlineUsers.size === 0) {
+                onlineUsersDropdown.innerHTML = '<div class="online-user-item">No users online</div>';
+                return;
+            }
+
+            Array.from(onlineUsers).forEach(user => {
+                const userEl = document.createElement('div');
+                userEl.className = 'online-user-item';
+                userEl.innerHTML = `
+                    <span class="online-dot online"></span>
+                    <span>${user}</span>
+                `;
+                onlineUsersDropdown.appendChild(userEl);
+            });
+        }
+
+        // Utility functions
+        function generateMessageId() {
+            return `${username}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function scrollToBottom() {
+            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+        }
+
+        // Event listeners
+        sendButton.addEventListener('click', sendMessage);
+
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
             }
         });
+
+        // Auto-resize textarea
+        messageInput.addEventListener('input', () => {
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+        });
+
+        // Online users dropdown toggle
+        onlineUsersBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onlineUsersDropdown.classList.toggle('show');
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', () => {
+            onlineUsersDropdown.classList.remove('show');
+        });
+
+        onlineUsersDropdown.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        // Initialize WebSocket connection
+        connectWebSocket();
     </script>
 </body>
 </html>
